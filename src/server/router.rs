@@ -418,6 +418,17 @@ fn tool_response(id: Option<Value>, result: &Value) -> String {
         .to_string();
     }
 
+    // If the result already has MCP-shaped content (e.g., from extension tool_result),
+    // pass it through instead of re-wrapping. This avoids nested content escapes.
+    if result.get("content").and_then(|c| c.as_array()).is_some() {
+        return json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        })
+        .to_string();
+    }
+
     let text = result.to_string();
     json!({
         "jsonrpc": "2.0",
