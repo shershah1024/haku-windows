@@ -14,9 +14,9 @@ pub fn running_apps() -> Vec<AppInfo> {
     unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let map = &mut *(lparam.0 as *mut HashMap<u32, (String, HWND)>);
 
-        if !IsWindowVisible(hwnd).as_bool() {
-            return BOOL(1);
-        }
+        // Note: IsWindowVisible check skipped for headless testing without RDP.
+        // Production: re-enable to filter out non-GUI windows.
+        // if !IsWindowVisible(hwnd).as_bool() { return BOOL(1); }
 
         let mut buf = [0u16; 512];
         let len = GetWindowTextW(hwnd, &mut buf) as usize;

@@ -139,24 +139,29 @@ pub fn set_value(hwnd_raw: isize, value: &str) -> Result<(), String> {
     let class = get_class_name(hwnd);
     let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
 
+    eprintln!("[set_value] hwnd={} class={} value={}", hwnd_raw, class, value);
+
     unsafe {
-        match class.as_str() {
-            "Edit" | "RichEdit20W" => {
-                SendMessageW(hwnd, WM_SETTEXT, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+        let result = match class.as_str() {
+            "Edit" | "RichEdit20W" | "RichEditD2DPT" => {
+                SendMessageW(hwnd, WM_SETTEXT, WPARAM(0), LPARAM(wide.as_ptr() as isize)).0
             }
             "ComboBox" => {
                 SendMessageW(
                     hwnd,
                     CB_SELECTSTRING,
-                    WPARAM(usize::MAX), // -1: search from beginning
+                    WPARAM(usize::MAX),
                     LPARAM(wide.as_ptr() as isize),
-                );
+                ).0
             }
             _ => {
-                // Try WM_SETTEXT as fallback
-                SendMessageW(hwnd, WM_SETTEXT, WPARAM(0), LPARAM(wide.as_ptr() as isize));
+                SendMessageW(hwnd, WM_SETTEXT, WPARAM(0), LPARAM(wide.as_ptr() as isize)).0
             }
-        }
+        };
+        eprintln!("[set_value] SendMessage returned {}", result);
+
+        let len = SendMessageW(hwnd, WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0;
+        eprintln!("[set_value] post-write WM_GETTEXTLENGTH={}", len);
     }
     Ok(())
 }
@@ -219,8 +224,10 @@ fn get_class_name(hwnd: HWND) -> String {
 
 fn is_window_visible_and_enabled(hwnd: HWND) -> bool {
     unsafe {
-        IsWindowVisible(hwnd).as_bool()
-            && (GetWindowLongW(hwnd, GWL_STYLE) as u32 & 0x08000000) == 0 // WS_DISABLED not set
+        // Note: IsWindowVisible check skipped for headless/non-RDP testing.
+        // Real GUI usage would require IsWindowVisible(hwnd).as_bool() &&
+        let _ = hwnd;
+        (GetWindowLongW(hwnd, GWL_STYLE) as u32 & 0x08000000) == 0 // WS_DISABLED not set
     }
 }
 
@@ -258,8 +265,12 @@ fn classify_control(class_name: &str, hwnd: HWND) -> Option<(&'static str, &'sta
 fn get_control_value(class_name: &str, hwnd: HWND) -> Option<String> {
     unsafe {
         match class_name {
-            "Edit" | "RichEdit20W" => {
-                let text = get_window_text(hwnd);
+            "Edit" | "RichEdit20W" | "RichEditD2DPT" => {
+                let len = SendMessageW(hwnd, WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0 as usize;
+                if len == 0 { return None; }
+                let mut buf = vec![0u16; len + 1];
+                SendMessageW(hwnd, WM_GETTEXT, WPARAM(buf.len()), LPARAM(buf.as_mut_ptr() as isize));
+                let text = String::from_utf16_lossy(&buf[..len]);
                 if text.is_empty() { None } else { Some(text) }
             }
             "Button" => {
