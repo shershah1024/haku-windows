@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, MAX_PATH, CloseHandle};
 use windows::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::core::PWSTR;
 
 /// List all visible GUI applications.
 pub fn running_apps() -> Vec<AppInfo> {
@@ -108,7 +109,7 @@ fn get_exe_name(pid: u32) -> Option<String> {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = [0u16; MAX_PATH as usize];
         let mut size = buf.len() as u32;
-        let ok = QueryFullProcessImageNameW(handle, Default::default(), &mut buf, &mut size);
+        let ok = QueryFullProcessImageNameW(handle, Default::default(), PWSTR(buf.as_mut_ptr()), &mut size);
         let _ = CloseHandle(handle);
         if ok.is_ok() {
             Some(String::from_utf16_lossy(&buf[..size as usize]))
