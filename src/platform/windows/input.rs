@@ -45,9 +45,6 @@ pub fn type_text(text: &str) -> Result<(), String> {
 /// Send a key combo like "ctrl+s", "alt+f4", "return", "tab".
 /// On Windows, "cmd" maps to "ctrl" for cross-platform compatibility.
 pub fn press_key(combo: &str) -> Result<(), String> {
-    let parts: Vec<&str> = combo.split('+').map(|s| s.trim().to_lowercase()).collect::<Vec<_>>()
-        .iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    // Re-collect to owned for lifetime
     let parts: Vec<String> = combo.split('+').map(|s| s.trim().to_lowercase()).collect();
 
     let mut modifiers: Vec<VIRTUAL_KEY> = Vec::new();

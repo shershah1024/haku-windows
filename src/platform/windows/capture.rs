@@ -1,7 +1,6 @@
 /// Screenshot capture using GDI BitBlt.
 
-use crate::platform::windows::apps;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -21,17 +20,17 @@ pub fn screenshot(pid: u32) -> Result<Vec<u8>, String> {
     }
 
     unsafe {
-        let hdc_screen = GetDC(Some(hwnd));
+        let hdc_screen = GetDC(hwnd);
         if hdc_screen.is_invalid() {
             return Err("GetDC failed".into());
         }
 
-        let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
+        let hdc_mem = CreateCompatibleDC(hdc_screen);
         let hbm = CreateCompatibleBitmap(hdc_screen, width, height);
         let old = SelectObject(hdc_mem, hbm);
 
         // Copy window content
-        let _ = BitBlt(hdc_mem, 0, 0, width, height, Some(hdc_screen), 0, 0, SRCCOPY);
+        let _ = BitBlt(hdc_mem, 0, 0, width, height, hdc_screen, 0, 0, SRCCOPY);
 
         // Read bitmap bits
         let mut bmi = BITMAPINFO {
@@ -62,7 +61,7 @@ pub fn screenshot(pid: u32) -> Result<Vec<u8>, String> {
         SelectObject(hdc_mem, old);
         let _ = DeleteObject(hbm);
         let _ = DeleteDC(hdc_mem);
-        ReleaseDC(Some(hwnd), hdc_screen);
+        ReleaseDC(hwnd, hdc_screen);
 
         // Convert BGRA to RGBA
         for chunk in pixels.chunks_exact_mut(4) {
@@ -89,10 +88,6 @@ pub fn screenshot(pid: u32) -> Result<Vec<u8>, String> {
 }
 
 fn find_main_window(target_pid: u32) -> Result<HWND, String> {
-    use windows::Win32::Foundation::{BOOL, LPARAM};
-
-    let mut result: Option<HWND> = None;
-
     unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let data = &mut *(lparam.0 as *mut (u32, Option<HWND>));
         let mut pid: u32 = 0;
@@ -104,7 +99,7 @@ fn find_main_window(target_pid: u32) -> Result<HWND, String> {
         BOOL(1)
     }
 
-    let mut data = (target_pid, None);
+    let mut data: (u32, Option<HWND>) = (target_pid, None);
     unsafe {
         let _ = EnumWindows(
             Some(callback),

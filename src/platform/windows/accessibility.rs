@@ -197,7 +197,7 @@ fn enumerate_children(parent: HWND) -> Vec<HWND> {
 
     unsafe {
         let _ = EnumChildWindows(
-            Some(parent),
+            parent,
             Some(callback),
             LPARAM(&mut children as *mut _ as isize),
         );
@@ -218,7 +218,10 @@ fn get_class_name(hwnd: HWND) -> String {
 }
 
 fn is_window_visible_and_enabled(hwnd: HWND) -> bool {
-    unsafe { IsWindowVisible(hwnd).as_bool() && IsWindowEnabled(hwnd).as_bool() }
+    unsafe {
+        IsWindowVisible(hwnd).as_bool()
+            && (GetWindowLongW(hwnd, GWL_STYLE) as u32 & 0x08000000) == 0 // WS_DISABLED not set
+    }
 }
 
 /// Classify a Win32 control class into a tool prefix and role.
