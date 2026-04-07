@@ -16,6 +16,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 pub async fn serve(state: Arc<AppState>) {
     let app = Router::new()
@@ -39,21 +40,36 @@ async fn ws_handler(
 }
 
 async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
-    let (mut sender, mut receiver) = socket.split();
+    let (mut ws_sender, mut ws_receiver) = socket.split();
 
     let session_id = uuid::Uuid::new_v4().to_string();
     tracing::info!(session_id = %session_id, "Browser connected");
 
-    // Send session ID
-    let msg = json!({"type": "session_id", "sessionId": &session_id}).to_string();
-    let _ = sender.send(Message::Text(msg.into())).await;
+    // mpsc channel: anyone with the tx can push a message out to this WebSocket.
+    // This is how the router dispatches tool_call messages back to the extension.
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
-    // Send license state
-    let license_msg = state.license.to_ws_message().to_string();
-    let _ = sender.send(Message::Text(license_msg.into())).await;
+    // Register the session with its writer channel
+    {
+        let mut mgr = state.browser_sessions.write().await;
+        mgr.create_session(&session_id, tx.clone());
+    }
 
-    // Process messages
-    while let Some(Ok(msg)) = receiver.next().await {
+    // Writer task: drains rx and forwards to the WebSocket sender.
+    let writer = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if ws_sender.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    // Initial messages: session id + license state
+    let _ = tx.send(json!({"type": "session_id", "sessionId": &session_id}).to_string());
+    let _ = tx.send(state.license.to_ws_message().to_string());
+
+    // Reader loop
+    while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
                 let parsed: Value = match serde_json::from_str(&text) {
@@ -65,16 +81,12 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
                 match msg_type {
                     "ping" => {
-                        let _ = sender
-                            .send(Message::Text(r#"{"type":"pong"}"#.into()))
-                            .await;
+                        let _ = tx.send(r#"{"type":"pong"}"#.to_string());
                     }
 
                     "register" => {
                         let source = parsed["source"].as_str().unwrap_or("");
                         tracing::info!(source, session_id = %session_id, "Extension registered");
-                        let mut mgr = state.browser_sessions.write().await;
-                        mgr.create_session(&session_id);
                     }
 
                     "page_info" => {
@@ -107,8 +119,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                             for el in elements {
                                 let label = el["label"].as_str().unwrap_or("");
                                 let kind = el["kind"].as_str().unwrap_or("");
-                                let id = el["id"].as_str().unwrap_or("");
-                                if label.is_empty() { continue; }
+                                if label.is_empty() {
+                                    continue;
+                                }
 
                                 let prefix = match kind {
                                     "button" => "click",
@@ -122,7 +135,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     _ => continue,
                                 };
 
-                                let slug = label.to_lowercase()
+                                let slug = label
+                                    .to_lowercase()
                                     .chars()
                                     .map(|c| if c.is_alphanumeric() { c } else { '_' })
                                     .collect::<String>()
@@ -131,7 +145,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                                     .take(50)
                                     .collect::<String>();
 
-                                if slug.is_empty() { continue; }
+                                if slug.is_empty() {
+                                    continue;
+                                }
 
                                 let tool_name = format!("{}_{}", prefix, slug);
                                 let desc = format!("{} '{}'", prefix, label);
@@ -163,10 +179,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                     }
 
                     "tool_result" => {
-                        if let (Some(call_id), Some(result)) = (
-                            parsed["callId"].as_str(),
-                            parsed["result"].as_object(),
-                        ) {
+                        if let (Some(call_id), Some(result)) =
+                            (parsed["callId"].as_str(), parsed["result"].as_object())
+                        {
                             let mut mgr = state.browser_sessions.write().await;
                             mgr.handle_tool_result(call_id, &Value::Object(result.clone()));
                         }
@@ -178,14 +193,6 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
                         {
                             let mut mgr = state.browser_sessions.write().await;
                             mgr.handle_tool_error(call_id, error);
-                        }
-                    }
-
-                    "activate_license" => {
-                        // Extension sends license key for activation
-                        // TODO: wire to license manager
-                        if let Some(_key) = parsed["key"].as_str() {
-                            tracing::info!("License activation requested via WebSocket");
                         }
                     }
 
@@ -202,4 +209,7 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     tracing::info!(session_id = %session_id, "Browser disconnected");
     let mut mgr = state.browser_sessions.write().await;
     mgr.remove_session(&session_id);
+    drop(mgr);
+    drop(tx); // closes the writer task
+    writer.abort();
 }

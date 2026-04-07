@@ -258,16 +258,51 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
         }
 
         _ => {
-            // Dynamic tool — check browser tools first, then native AX
-            let browser = state.browser_sessions.read().await;
-            if browser.has_browser_tool(name) {
-                // TODO: route tool call to extension via WebSocket
-                return json!({"error": "browser tool execution not yet wired"});
+            // Dynamic tool — check browser tools first, then native
+            let has_browser = {
+                let browser = state.browser_sessions.read().await;
+                browser.has_browser_tool(name)
+            };
+
+            if has_browser {
+                return dispatch_browser_tool(state, name, args).await;
             }
-            drop(browser);
 
             let mut session = state.session_manager.write().await;
             session.perform_action(&state.platform, name, args, &state.flow_store).await
+        }
+    }
+}
+
+// ── Browser tool dispatch ──
+
+const BROWSER_TOOL_TIMEOUT_SECS: u64 = 30;
+
+/// Send a tool call to the Chrome extension via WebSocket and wait for the result.
+async fn dispatch_browser_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
+    let (call_id, receiver) = {
+        let mut mgr = state.browser_sessions.write().await;
+        match mgr.dispatch_tool_call(name, args) {
+            Ok(pair) => pair,
+            Err(e) => return json!({"error": e}),
+        }
+    };
+
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(BROWSER_TOOL_TIMEOUT_SECS),
+        receiver,
+    )
+    .await
+    {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => {
+            // oneshot sender dropped (session disconnected)
+            state.browser_sessions.write().await.cancel_pending(&call_id);
+            json!({"error": format!("extension disconnected before responding to '{name}'")})
+        }
+        Err(_) => {
+            state.browser_sessions.write().await.cancel_pending(&call_id);
+            json!({"error": format!("timeout waiting for extension to respond to '{name}'")})
         }
     }
 }

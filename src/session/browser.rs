@@ -5,6 +5,7 @@
 
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug, Clone)]
 pub struct WebTool {
@@ -17,22 +18,24 @@ pub struct WebTool {
 
 #[derive(Debug, Clone)]
 struct BrowserTool {
-    name: String,
     description: String,
     input_schema: Value,
-    session_id: String,
+    /// Which session registered this tool — used to route tool_call back to the right extension.
+    owner_session: String,
 }
 
 struct BrowserSession {
-    session_id: String,
     tools: HashMap<String, BrowserTool>,
     is_ready: bool,
+    /// Channel to push messages out to this session's WebSocket writer task.
+    tx: mpsc::UnboundedSender<String>,
 }
 
 pub struct BrowserSessionManager {
     sessions: HashMap<String, BrowserSession>,
     web_tools: HashMap<String, WebTool>,
-    pending_results: HashMap<String, tokio::sync::oneshot::Sender<Value>>,
+    /// Pending browser tool calls — awaiting a tool_result/tool_error from the extension.
+    pending_results: HashMap<String, oneshot::Sender<Value>>,
 }
 
 impl BrowserSessionManager {
@@ -44,13 +47,13 @@ impl BrowserSessionManager {
         }
     }
 
-    pub fn create_session(&mut self, session_id: &str) {
+    pub fn create_session(&mut self, session_id: &str, tx: mpsc::UnboundedSender<String>) {
         self.sessions.insert(
             session_id.to_string(),
             BrowserSession {
-                session_id: session_id.to_string(),
                 tools: HashMap::new(),
                 is_ready: false,
+                tx,
             },
         );
     }
@@ -76,10 +79,9 @@ impl BrowserSessionManager {
             session.tools.insert(
                 name.to_string(),
                 BrowserTool {
-                    name: name.to_string(),
                     description: description.to_string(),
                     input_schema: input_schema.clone(),
-                    session_id: session_id.to_string(),
+                    owner_session: session_id.to_string(),
                 },
             );
         }
@@ -101,7 +103,6 @@ impl BrowserSessionManager {
                         "name": name,
                         "description": tool.description,
                         "inputSchema": tool.input_schema,
-                        "defer_loading": true,
                     }));
                 }
             }
@@ -111,6 +112,53 @@ impl BrowserSessionManager {
 
     pub fn has_browser_tool(&self, name: &str) -> bool {
         self.sessions.values().any(|s| s.tools.contains_key(name))
+    }
+
+    /// Find the session that owns a tool, and return its writer channel.
+    fn session_for_tool(&self, tool_name: &str) -> Option<(String, mpsc::UnboundedSender<String>)> {
+        for (sid, session) in &self.sessions {
+            if session.is_ready && session.tools.contains_key(tool_name) {
+                return Some((sid.clone(), session.tx.clone()));
+            }
+        }
+        None
+    }
+
+    /// Dispatch a tool call to the extension that registered it.
+    /// Returns a oneshot::Receiver that will resolve when the extension sends
+    /// tool_result or tool_error with the matching callId.
+    pub fn dispatch_tool_call(
+        &mut self,
+        name: &str,
+        args: &Value,
+    ) -> Result<(String, oneshot::Receiver<Value>), String> {
+        let (_session_id, tx) = self
+            .session_for_tool(name)
+            .ok_or_else(|| format!("no extension registered for tool '{name}'"))?;
+
+        let call_id = uuid::Uuid::new_v4().to_string();
+        let (result_tx, result_rx) = oneshot::channel::<Value>();
+        self.pending_results.insert(call_id.clone(), result_tx);
+
+        let msg = json!({
+            "type": "tool_call",
+            "callId": call_id,
+            "name": name,
+            "args": args,
+        })
+        .to_string();
+
+        if tx.send(msg).is_err() {
+            self.pending_results.remove(&call_id);
+            return Err("extension WebSocket channel closed".into());
+        }
+
+        Ok((call_id, result_rx))
+    }
+
+    /// Cancel a pending call (e.g., on timeout).
+    pub fn cancel_pending(&mut self, call_id: &str) {
+        self.pending_results.remove(call_id);
     }
 
     pub fn register_web_tool(
@@ -163,7 +211,6 @@ impl BrowserSessionManager {
                     "name": t.name,
                     "description": t.description,
                     "inputSchema": schema,
-                    "defer_loading": true,
                 })
             })
             .collect()
