@@ -1,13 +1,12 @@
 mod config;
+#[cfg(feature = "embedding")]
+mod embedding;
 mod flow;
 mod license;
 mod logging;
 mod platform;
 mod server;
 mod session;
-
-#[cfg(feature = "embedding")]
-mod embedding;
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -42,6 +41,14 @@ async fn main() {
     let license_state = license.check_state();
     tracing::info!(?license_state, "License state");
 
+    #[cfg(feature = "embedding")]
+    let embedding = {
+        let model_path = config::Config::config_dir()
+            .join("models")
+            .join("embeddinggemma-300m-qat-Q8_0.gguf");
+        embedding::EmbeddingEngine::load(&model_path)
+    };
+
     let state = Arc::new(AppState {
         config: config.clone(),
         session_manager: RwLock::new(session::SessionManager::new()),
@@ -50,7 +57,7 @@ async fn main() {
         platform,
         license,
         #[cfg(feature = "embedding")]
-        embedding: None, // TODO: load model in Phase 2
+        embedding,
     });
 
     config.write_internal_config();

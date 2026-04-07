@@ -113,6 +113,11 @@ fn static_tools() -> Vec<Value> {
              "Delete a saved flow by name.",
              json!({"name": {"type": "string", "description": "Flow name"}}),
              &["name"]),
+        tool("search_available_tools",
+             "Find the most relevant tools for a given intent. Use when there are many tools (e.g., 100+ from a web page scan) and you need to surface the ones matching what you want to do. Returns top-K tool names ranked by semantic similarity.",
+             json!({"query": {"type": "string", "description": "What you want to do (e.g., 'submit the form', 'enter email')"},
+                    "top_k": {"type": "integer", "description": "Max results to return (default 7)"}}),
+             &["query"]),
     ]
 }
 
@@ -243,6 +248,15 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             flow.delete_flow(name)
         }
 
+        "search_available_tools" => {
+            let query = match args["query"].as_str() {
+                Some(q) => q,
+                None => return json!({"error": "missing 'query'"}),
+            };
+            let top_k = args["top_k"].as_u64().unwrap_or(7) as usize;
+            search_tools(state, query, top_k).await
+        }
+
         _ => {
             // Dynamic tool — check browser tools first, then native AX
             let browser = state.browser_sessions.read().await;
@@ -256,6 +270,87 @@ async fn call_tool(state: &Arc<AppState>, name: &str, args: &Value) -> Value {
             session.perform_action(&state.platform, name, args, &state.flow_store).await
         }
     }
+}
+
+// ── Tool search ──
+
+/// Find the most relevant tools for a query.
+///
+/// With `embedding` feature: semantic ranking via EmbeddingGemma.
+/// Without: substring match fallback (still useful for small tool sets).
+async fn search_tools(state: &Arc<AppState>, query: &str, top_k: usize) -> Value {
+    // Collect all available tools (static + dynamic + browser-registered)
+    let all = all_tools(state).await;
+    let mut candidates: Vec<(String, String)> = Vec::new();
+    for t in &all {
+        if let (Some(name), Some(desc)) = (t["name"].as_str(), t["description"].as_str()) {
+            candidates.push((name.to_string(), desc.to_string()));
+        }
+    }
+
+    #[cfg(feature = "embedding")]
+    {
+        if let Some(ref engine) = state.embedding {
+            // Ensure all candidates have embeddings cached
+            engine.cache_tool_embeddings(&candidates);
+            let ranked = engine.rank_tools(query, top_k);
+            if !ranked.is_empty() {
+                let results: Vec<Value> = ranked
+                    .into_iter()
+                    .filter_map(|(name, score)| {
+                        let desc = candidates
+                            .iter()
+                            .find(|(n, _)| n == &name)
+                            .map(|(_, d)| d.clone())
+                            .unwrap_or_default();
+                        Some(json!({
+                            "name": name,
+                            "description": desc,
+                            "score": score,
+                        }))
+                    })
+                    .collect();
+                return json!({
+                    "query": query,
+                    "method": "semantic",
+                    "matches": results,
+                });
+            }
+        }
+    }
+
+    // Substring fallback
+    let q_lower = query.to_lowercase();
+    let mut scored: Vec<(String, String, f32)> = candidates
+        .into_iter()
+        .map(|(name, desc)| {
+            let name_score = if name.to_lowercase().contains(&q_lower) { 2.0 } else { 0.0 };
+            let desc_score = if desc.to_lowercase().contains(&q_lower) { 1.0 } else { 0.0 };
+            // Token overlap bonus
+            let overlap: f32 = q_lower
+                .split_whitespace()
+                .filter(|word| {
+                    name.to_lowercase().contains(word) || desc.to_lowercase().contains(word)
+                })
+                .count() as f32
+                * 0.5;
+            (name, desc, name_score + desc_score + overlap)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(top_k);
+
+    let results: Vec<Value> = scored
+        .into_iter()
+        .filter(|(_, _, score)| *score > 0.0)
+        .map(|(name, desc, score)| json!({"name": name, "description": desc, "score": score}))
+        .collect();
+
+    json!({
+        "query": query,
+        "method": "substring",
+        "matches": results,
+    })
 }
 
 // ── JSON-RPC helpers ──
