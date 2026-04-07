@@ -1,0 +1,9 @@
+/target
+*.exe
+*.pdb
+*.dll
+*.dylib
+*.so
+.DS_Store
+/vendor/llama.cpp/
+/models/

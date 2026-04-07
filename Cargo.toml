@@ -1,0 +1,57 @@
+[package]
+name = "haku"
+version = "0.1.0"
+edition = "2021"
+description = "Native app automation + embedding server for Windows"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP server
+axum = { version = "0.8", features = ["ws"] }
+tower-http = { version = "0.6", features = ["cors"] }
+
+# WebSocket
+futures-util = "0.3"
+
+# JSON
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# SQLite
+rusqlite = { version = "0.33", features = ["bundled"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+dirs = "6"
+base64 = "0.22"
+
+# License HTTP calls
+ureq = "3"
+
+# Date/time for license trial
+chrono = { version = "0.4", features = ["serde"] }
+
+[features]
+default = []
+embedding = []
+
+# Windows platform
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[build-dependencies]
+cc = "1"
