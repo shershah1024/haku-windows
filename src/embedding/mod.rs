@@ -18,7 +18,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 
 const DIMS: usize = 256;
-const N_CTX: u32 = 512;
+/// Match the EmbeddingGemma training context. Warnings about n_ctx_seq < n_ctx_train
+/// appear when this is smaller than the model's native 2048.
+const N_CTX: u32 = 2048;
 
 pub struct EmbeddingEngine {
     backend: Arc<LlamaBackend>,
@@ -145,11 +147,12 @@ impl EmbeddingEngine {
             return None;
         }
 
-        // Build a batch with logits=true on the last token (CLS pooling)
+        // EmbeddingGemma uses mean pooling (pooling_type=1), so ALL tokens need
+        // to be marked as outputs. Marking only the last token triggers llama.cpp's
+        // "embeddings required but some input tokens were not marked as outputs" warning.
         let mut batch = LlamaBatch::new(tokens.len(), 1);
         for (i, token) in tokens.iter().enumerate() {
-            let is_last = i == tokens.len() - 1;
-            if let Err(e) = batch.add(*token, i as i32, &[0], is_last) {
+            if let Err(e) = batch.add(*token, i as i32, &[0], true) {
                 tracing::warn!("Batch add failed: {e}");
                 return None;
             }

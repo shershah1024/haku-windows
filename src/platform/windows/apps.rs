@@ -14,9 +14,12 @@ pub fn running_apps() -> Vec<AppInfo> {
     unsafe extern "system" fn callback(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let map = &mut *(lparam.0 as *mut HashMap<u32, (String, HWND)>);
 
-        // Note: IsWindowVisible check skipped for headless testing without RDP.
-        // Production: re-enable to filter out non-GUI windows.
-        // if !IsWindowVisible(hwnd).as_bool() { return BOOL(1); }
+        // Filter to visible top-level windows only.
+        // HAKU_SKIP_VISIBILITY=1 bypasses for headless testing (session 0 has no desktop).
+        let skip_vis = std::env::var("HAKU_SKIP_VISIBILITY").is_ok();
+        if !skip_vis && !IsWindowVisible(hwnd).as_bool() {
+            return BOOL(1);
+        }
 
         let mut buf = [0u16; 512];
         let len = GetWindowTextW(hwnd, &mut buf) as usize;

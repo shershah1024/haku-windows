@@ -139,8 +139,6 @@ pub fn set_value(hwnd_raw: isize, value: &str) -> Result<(), String> {
     let class = get_class_name(hwnd);
     let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
 
-    eprintln!("[set_value] hwnd={} class={} value={}", hwnd_raw, class, value);
-
     unsafe {
         let result = match class.as_str() {
             "Edit" | "RichEdit20W" | "RichEditD2DPT" => {
@@ -158,10 +156,10 @@ pub fn set_value(hwnd_raw: isize, value: &str) -> Result<(), String> {
                 SendMessageW(hwnd, WM_SETTEXT, WPARAM(0), LPARAM(wide.as_ptr() as isize)).0
             }
         };
-        eprintln!("[set_value] SendMessage returned {}", result);
 
-        let len = SendMessageW(hwnd, WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0;
-        eprintln!("[set_value] post-write WM_GETTEXTLENGTH={}", len);
+        if result == 0 {
+            return Err(format!("SendMessage failed for class {}", class));
+        }
     }
     Ok(())
 }
@@ -224,10 +222,12 @@ fn get_class_name(hwnd: HWND) -> String {
 
 fn is_window_visible_and_enabled(hwnd: HWND) -> bool {
     unsafe {
-        // Note: IsWindowVisible check skipped for headless/non-RDP testing.
-        // Real GUI usage would require IsWindowVisible(hwnd).as_bool() &&
-        let _ = hwnd;
-        (GetWindowLongW(hwnd, GWL_STYLE) as u32 & 0x08000000) == 0 // WS_DISABLED not set
+        let enabled = (GetWindowLongW(hwnd, GWL_STYLE) as u32 & 0x08000000) == 0; // WS_DISABLED not set
+        // HAKU_SKIP_VISIBILITY=1 bypasses IsWindowVisible for headless testing
+        // (session 0 windows report visible=false even when they exist).
+        let skip_vis = std::env::var("HAKU_SKIP_VISIBILITY").is_ok();
+        let visible = skip_vis || IsWindowVisible(hwnd).as_bool();
+        visible && enabled
     }
 }
 
