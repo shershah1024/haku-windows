@@ -10,10 +10,9 @@ use std::path::PathBuf;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Default model URL — EmbeddingGemma-300M Q8_0 GGUF (~313MB).
-/// Override with HAKU_MODEL_URL env var. Point this at your R2 bucket for
-/// production distribution.
+/// Hosted on Cloudflare R2. Override with HAKU_MODEL_URL env var if needed.
 const DEFAULT_MODEL_URL: &str =
-    "https://models.haku.app/embeddinggemma-300m-qat-Q8_0.gguf";
+    "https://examaudio.tslfiles.org/models/embeddinggemma-300m-qat-Q8_0.gguf";
 pub const MODEL_FILENAME: &str = "embeddinggemma-300m-qat-Q8_0.gguf";
 
 pub fn model_url() -> String {
