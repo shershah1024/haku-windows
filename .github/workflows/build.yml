@@ -15,16 +15,24 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
+      - name: Install LLVM (for bindgen / llama-cpp-2)
+        run: choco install llvm -y --no-progress
+        shell: pwsh
+
+      - name: Set LIBCLANG_PATH
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Cache cargo + llama.cpp build
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-embed-${{ hashFiles('**/Cargo.lock') }}
 
-      - name: Build (server only, no embedding)
+      - name: Build (with embedding feature)
         run: cargo build --release
 
       - name: Package release zip
@@ -64,13 +72,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check (stub platform)
+      - name: Install LLVM
+        run: brew install llvm cmake
+      - name: Check
         run: cargo check
+        env:
+          LIBCLANG_PATH: /opt/homebrew/opt/llvm/lib
 
   linux-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Check (stub platform)
+      - name: Install LLVM
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev cmake
+      - name: Check
         run: cargo check

@@ -7,25 +7,23 @@ as tools for AI agents.
 Quick start
 -----------
 
-  1. Right-click install.bat -> Run as administrator (or run from cmd)
+  1. Run install.bat
      Installs haku.exe to %LOCALAPPDATA%\Haku and adds it to your user PATH.
 
   2. Open a new PowerShell window so PATH refreshes.
 
-  3. Run setup:
-       haku --setup
-     Optionally downloads the EmbeddingGemma-300M model (~313MB) for
-     semantic tool search. Without it, haku still runs — search just
-     uses substring matching.
-
-  4. Start the server:
+  3. Start the server:
        haku
      Listens on:
        - http://127.0.0.1:19820/mcp   (MCP JSON-RPC, requires bearer token)
        - ws://127.0.0.1:19822/ws       (Chrome extension bridge)
      Bearer token is at: %USERPROFILE%\.haku\config.json
 
-  5. Connect a Chrome extension or MCP client to the above ports.
+     On first run, haku downloads the embedding model (~313MB) in the
+     background. The server is usable immediately for native automation.
+     Web automation tool ranking activates once download finishes (1-3 min).
+
+  4. Connect a Chrome extension or MCP client to the above ports.
 
 Files
 -----
