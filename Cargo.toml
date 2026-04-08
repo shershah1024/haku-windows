@@ -3,6 +3,13 @@ name = "haku"
 version = "0.1.0"
 edition = "2021"
 description = "Native app automation + embedding server for Windows"
+authors = ["Shahir Shershah"]
+license-file = "LICENSE"
+repository = "https://github.com/shershah1024/haku-windows"
+
+[package.metadata.wix]
+upgrade-guid = "F4A1A2C2-9C8D-4B5E-9E1A-1A2B3C4D5E6F"
+path-guid = "8C9D1E2F-3A4B-5C6D-7E8F-9A0B1C2D3E4F"
 
 [dependencies]
 # Async runtime

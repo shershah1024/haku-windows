@@ -7,6 +7,7 @@ mod logging;
 mod platform;
 mod server;
 mod session;
+mod setup;
 
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -25,6 +26,11 @@ pub struct AppState {
 
 #[tokio::main]
 async fn main() {
+    // Handle CLI subcommands (--version, --setup, --download-model, --activate)
+    if let Some(code) = setup::handle_cli() {
+        std::process::exit(code);
+    }
+
     logging::init();
     tracing::info!("Haku starting up");
 
