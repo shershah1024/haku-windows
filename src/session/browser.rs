@@ -20,8 +20,6 @@ pub struct WebTool {
 struct BrowserTool {
     description: String,
     input_schema: Value,
-    /// Which session registered this tool — used to route tool_call back to the right extension.
-    owner_session: String,
 }
 
 struct BrowserSession {
@@ -81,7 +79,6 @@ impl BrowserSessionManager {
                 BrowserTool {
                     description: description.to_string(),
                     input_schema: input_schema.clone(),
-                    owner_session: session_id.to_string(),
                 },
             );
         }
