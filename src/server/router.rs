@@ -325,7 +325,8 @@ async fn search_tools(state: &Arc<AppState>, query: &str, top_k: usize) -> Value
 
     #[cfg(feature = "embedding")]
     {
-        if let Some(ref engine) = state.embedding {
+        let guard = state.embedding.read().await;
+        if let Some(ref engine) = *guard {
             // Ensure all candidates have embeddings cached
             engine.cache_tool_embeddings(&candidates);
             let ranked = engine.rank_tools(query, top_k);

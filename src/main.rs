@@ -20,8 +20,10 @@ pub struct AppState {
     pub flow_store: Mutex<flow::FlowStore>,
     pub platform: Box<dyn platform::Platform>,
     pub license: license::LicenseManager,
+    /// Hot-swappable embedding engine: None until the model file is downloaded
+    /// and loaded. Uses substring fallback in router until available.
     #[cfg(feature = "embedding")]
-    pub embedding: Option<embedding::EmbeddingEngine>,
+    pub embedding: RwLock<Option<embedding::EmbeddingEngine>>,
 }
 
 #[tokio::main]
@@ -49,10 +51,16 @@ async fn main() {
 
     #[cfg(feature = "embedding")]
     let embedding = {
-        let model_path = config::Config::config_dir()
-            .join("models")
-            .join("embeddinggemma-300m-qat-Q8_0.gguf");
-        embedding::EmbeddingEngine::load(&model_path)
+        let path = setup::model_path();
+        if path.exists() {
+            embedding::EmbeddingEngine::load(&path)
+        } else {
+            tracing::info!(
+                "Embedding model not present at {} — will download in background after startup. Substring search active until ready.",
+                path.display()
+            );
+            None
+        }
     };
 
     let state = Arc::new(AppState {
@@ -63,7 +71,7 @@ async fn main() {
         platform,
         license,
         #[cfg(feature = "embedding")]
-        embedding,
+        embedding: tokio::sync::RwLock::new(embedding),
     });
 
     config.write_internal_config();
@@ -81,6 +89,47 @@ async fn main() {
             server::websocket::serve(state).await;
         })
     };
+
+    // Background model download — only if embedding feature on AND model missing.
+    #[cfg(feature = "embedding")]
+    {
+        let state_dl = Arc::clone(&state);
+        tokio::spawn(async move {
+            if state_dl.embedding.read().await.is_some() {
+                return; // already loaded
+            }
+            tracing::info!("Starting background model download from {}", setup::model_url());
+            let result = tokio::task::spawn_blocking(|| {
+                setup::download_model_with_progress(|written, total| {
+                    if let Some(t) = total {
+                        let pct = (written as f64 / t as f64 * 100.0) as u32;
+                        if pct % 10 == 0 && written > 0 {
+                            tracing::info!("Model download: {pct}% ({written}/{t} bytes)");
+                        }
+                    }
+                })
+            })
+            .await;
+
+            match result {
+                Ok(Ok(path)) => {
+                    tracing::info!("Model downloaded to {}, loading...", path.display());
+                    let engine = tokio::task::spawn_blocking(move || {
+                        embedding::EmbeddingEngine::load(&path)
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    if engine.is_some() {
+                        *state_dl.embedding.write().await = engine;
+                        tracing::info!("Embedding engine ready — semantic search active");
+                    }
+                }
+                Ok(Err(e)) => tracing::error!("Model download failed: {e}"),
+                Err(e) => tracing::error!("Model download task panicked: {e}"),
+            }
+        });
+    }
 
     tracing::info!(
         "Haku running — MCP on 127.0.0.1:{}, WebSocket on 127.0.0.1:{}",

@@ -9,11 +9,28 @@ use std::path::PathBuf;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Public model URL — EmbeddingGemma-300M Q8_0 GGUF (~313MB).
-/// Hosted on Hugging Face's CDN.
-const MODEL_URL: &str =
-    "https://huggingface.co/google/embeddinggemma-300m-qat-q8_0-unquantized/resolve/main/embeddinggemma-300M-qat-q8_0-unquantized.gguf";
-const MODEL_FILENAME: &str = "embeddinggemma-300m-qat-Q8_0.gguf";
+/// Default model URL — EmbeddingGemma-300M Q8_0 GGUF (~313MB).
+/// Override with HAKU_MODEL_URL env var. Point this at your R2 bucket for
+/// production distribution.
+const DEFAULT_MODEL_URL: &str =
+    "https://models.haku.app/embeddinggemma-300m-qat-Q8_0.gguf";
+pub const MODEL_FILENAME: &str = "embeddinggemma-300m-qat-Q8_0.gguf";
+
+pub fn model_url() -> String {
+    std::env::var("HAKU_MODEL_URL").unwrap_or_else(|_| DEFAULT_MODEL_URL.to_string())
+}
+
+pub fn model_path() -> std::path::PathBuf {
+    Config::config_dir().join("models").join(MODEL_FILENAME)
+}
+
+pub fn model_exists() -> bool {
+    model_path().exists()
+}
+
+pub fn ensure_dirs() {
+    let _ = std::fs::create_dir_all(Config::config_dir().join("models"));
+}
 
 pub fn handle_cli() -> Option<i32> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -118,25 +135,25 @@ fn confirm(prompt: &str) -> bool {
     answer.is_empty() || answer == "y" || answer == "yes"
 }
 
-fn ensure_dirs() {
-    let _ = std::fs::create_dir_all(Config::config_dir().join("models"));
-}
+/// Download the embedding model. Reports progress via the supplied callback
+/// (called periodically with `(bytes_written, total_bytes)`).
+/// Atomic: writes to a `.partial` file then renames on success.
+pub fn download_model_with_progress<F: FnMut(u64, Option<u64>)>(
+    mut on_progress: F,
+) -> Result<PathBuf, String> {
+    use std::io::Read;
 
-fn model_path() -> PathBuf {
-    Config::config_dir().join("models").join(MODEL_FILENAME)
-}
-
-fn model_exists() -> bool {
-    model_path().exists()
-}
-
-fn download_model() -> Result<(), String> {
+    ensure_dirs();
     let dest = model_path();
-    println!("Downloading from: {MODEL_URL}");
-    println!("Saving to: {}", dest.display());
-    println!("(This is ~313MB and may take several minutes...)");
+    let partial = dest.with_extension("gguf.partial");
 
-    let resp = ureq::get(MODEL_URL)
+    // Cleanup any prior incomplete download
+    let _ = std::fs::remove_file(&partial);
+
+    let url = model_url();
+    tracing::info!(url = %url, "Downloading embedding model");
+
+    let resp = ureq::get(&url)
         .call()
         .map_err(|e| format!("HTTP error: {e}"))?;
 
@@ -147,10 +164,9 @@ fn download_model() -> Result<(), String> {
         .and_then(|s| s.parse().ok());
 
     let mut reader = resp.into_body().into_reader();
-    let mut file = std::fs::File::create(&dest).map_err(|e| format!("Create file: {e}"))?;
+    let mut file = std::fs::File::create(&partial).map_err(|e| format!("Create file: {e}"))?;
     let mut buf = vec![0u8; 65536];
     let mut written: u64 = 0;
-    let start = std::time::Instant::now();
 
     loop {
         let n = reader.read(&mut buf).map_err(|e| format!("Read: {e}"))?;
@@ -159,7 +175,21 @@ fn download_model() -> Result<(), String> {
         }
         file.write_all(&buf[..n]).map_err(|e| format!("Write: {e}"))?;
         written += n as u64;
+        on_progress(written, total);
+    }
 
+    drop(file);
+    std::fs::rename(&partial, &dest).map_err(|e| format!("Rename: {e}"))?;
+    Ok(dest)
+}
+
+fn download_model() -> Result<(), String> {
+    println!("Downloading from: {}", model_url());
+    println!("Saving to: {}", model_path().display());
+    println!("(This is ~313MB and may take several minutes...)");
+
+    let start = std::time::Instant::now();
+    let dest = download_model_with_progress(|written, total| {
         if let Some(t) = total {
             let pct = (written as f64 / t as f64 * 100.0) as u32;
             print!("\r  {written} / {t} bytes ({pct}%)");
@@ -167,16 +197,13 @@ fn download_model() -> Result<(), String> {
             print!("\r  {written} bytes");
         }
         let _ = std::io::stdout().flush();
-    }
+    })?;
 
     let elapsed = start.elapsed().as_secs_f64();
     println!(
-        "\nDownloaded {} bytes in {:.1}s ({:.1} MB/s)",
-        written,
+        "\nDownloaded to {} in {:.1}s",
+        dest.display(),
         elapsed,
-        written as f64 / 1_048_576.0 / elapsed
     );
     Ok(())
 }
-
-use std::io::Read;
